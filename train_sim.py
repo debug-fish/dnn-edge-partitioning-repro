@@ -8,15 +8,15 @@ from dnn_p import DNN_P
 # ============================================================
 # 1. 随机模拟每个候选分区点的延迟和能耗
 # ============================================================
-def simulate_latency_energy(n_points, seed=42):
+def simulate_latency_energy(n_points, seed=42):        #固定种子可复现，方便调试
     """
     模拟 n_points 个候选分区点的延迟 L 和能耗 E。
     真实场景中这些值来自在线采集器；这里先用随机数代替，
     但要保证量级合理：延迟在 0~10 秒，能耗在 0~3000 mWh。
     """
     rng = np.random.default_rng(seed)
-    L = rng.uniform(0.5, 10.0, size=n_points)          # 秒
-    E = rng.uniform(100.0, 3000.0, size=n_points)      # mWh
+    L = rng.uniform(0.5, 10.0, size=n_points)          # 延迟/秒
+    E = rng.uniform(100.0, 3000.0, size=n_points)      # 能耗/mWh
     return L, E
 
 
@@ -24,7 +24,7 @@ def simulate_latency_energy(n_points, seed=42):
 # 2. 标准化函数（论文式 7、8）
 # ============================================================
 def standardize_latency(L, w1=1.0, b1=-3.6, j1=1.3, k1=1.0):
-    return -np.tanh((w1 * L + b1) / j1) + k1
+    return -np.tanh((w1 * L + b1) / j1) + k1           #tanh 把任意数值压到 (-1, 1)
 
 
 def standardize_energy(E, w2=1.0, b2=-2.1, j2=0.5, k2=1.0):
@@ -34,7 +34,13 @@ def standardize_energy(E, w2=1.0, b2=-2.1, j2=0.5, k2=1.0):
 # ============================================================
 # 3. 训练循环
 # ============================================================
-def train(num_episodes=1000, n_points=18, alpha=0.5, beta=0.5, lr=1e-4):
+def train(num_episodes=1000, n_points=18, alpha=0.5, beta=0.5, lr=1e-4): #轮、候选点、权重、学习率
+    """
+    α 大（0.7~0.95）	   更看重延迟，宁可多耗电也要快	 实时控制、自动驾驶、交互应用
+    α 小（0.05~0.3）	   延迟不那么重要	电池供电的传感器
+    α = 0.5                延迟和能耗平衡   通用场景
+
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"使用设备: {device}")
 
@@ -60,17 +66,20 @@ def train(num_episodes=1000, n_points=18, alpha=0.5, beta=0.5, lr=1e-4):
     U_history = []
 
     for episode in range(num_episodes):
-        # 1) 随机生成一个状态 s = [R, Q, h]
+        # 1) 随机生成一个状态 s = [R, Q, h]       #实时上传传输速率transmission rate(大就说明网络快，传中间张量便宜，可以多切，让服务器多跑)
+                                                 #链路信号质量signal quality、信道状态channel state
         R = np.random.uniform(1.0, 100.0)
         Q = np.random.uniform(0.0, 1.0)
-        h = np.random.uniform(-90.0, -30.0)
-        s = torch.tensor([[R / 100.0, Q, (h + 100.0) / 100.0]],
-                         dtype=torch.float32, device=device)
+        h = np.random.uniform(-90.0, -30.0)     #越接近 0，信号越好
+        s = torch.tensor([[R / 100.0, Q, (h + 100.0) / 100.0]],#双层方括号是二维，手动归一化，防止网格难收敛
+                         dtype=torch.float32, device=device)   #tensor创建一个shape = (1, 3)的pytorch张量
 
         # 2) DNN-p 前向，得到概率分布
         o, p = dnn_p(s)                       # p: (1, n_points)
         p_np = p.detach().cpu().numpy().flatten()
-
+                #把张量从计算图里摘出来，方便后续的计算；把张量移到CPU上，因为numpy数组只能存在CPU上；
+                # 把 PyTorch 张量转成 NumPy 数组；多维数组压成一维数组，方便 np.random.choice() 采样
+       
         # 3) 按概率采样分区点 a
         a = np.random.choice(n_points, p=p_np)
 
@@ -78,11 +87,12 @@ def train(num_episodes=1000, n_points=18, alpha=0.5, beta=0.5, lr=1e-4):
         U = U_all[a]
 
         # 5) 计算损失（式 6）
-        baseline = np.mean(baseline_list) if len(baseline_list) > 0 else 0.0
-        log_p_a = torch.log(p[0, a] + 1e-8)
-        loss = -log_p_a * (U - baseline)
+        baseline = np.mean(baseline_list) if len(baseline_list) > 0 else 0.0  #历史所有任务效用值的平均值
+        log_p_a = torch.log(p[0, a] + 1e-8)     #加一个极小的 1e-8，保证 log 的参数永远大于 0；概率越小，log越负
+        loss = -log_p_a * (U - baseline)        #如果 U < baseline（比平均好），这一项为负，梯度方向会增大 p_a；
+                                                #如果 U > baseline（比平均差），会减小 p_a。
 
-        # 6) 反向传播 + 更新
+        # 6) 反向传播 + 更新（清空梯度 → 反向传播 → 更新参数）
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
