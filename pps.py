@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision.models import vgg16
 
-TABLE2_END_INDICES = [
+TABLE2_END_INDICES = [                              #直接从Table_2反推
     -1,   # Layer0: Input-0
      1,   # Layer1: Conv2d-1, Relu-2
      4,   # Layer2: Conv2d-3, Relu-4, MaxPool2d-5
@@ -26,7 +26,7 @@ TABLE2_END_INDICES = [
 def flatten_model(model):
     ordered = []
     for name, layer in model.named_modules():
-        if layer is model or isinstance(layer, nn.Sequential):
+        if layer is model or isinstance(layer, nn.Sequential):  #跳过VGG本身和容器（过滤）
             continue
         ordered.append((name, layer))
     return ordered
@@ -35,9 +35,9 @@ def flatten_model(model):
 def table2_partition(model):
     ordered = flatten_model(model)
     groups = []
-    prev_end = -1
+    prev_end = -1           #记录上一个候选点的结束索引，初始化为 -1（表示还没有候选点）
     for gid, end_idx in enumerate(TABLE2_END_INDICES):
-        if gid == 0:
+        if gid == 0:        #Layer0单独处理
             groups.append({
                 "index": 0,
                 "layers": ["Input-0"],
@@ -46,7 +46,7 @@ def table2_partition(model):
             continue
         start = prev_end + 1
         end = end_idx + 1
-        group_layers = [ordered[i][0] for i in range(start, min(end, len(ordered)))]
+        group_layers = [ordered[i][0] for i in range(start, min(end, len(ordered)))]    #加min防止越界
         groups.append({
             "index": gid,
             "layers": group_layers,
@@ -57,13 +57,14 @@ def table2_partition(model):
 
 
 if __name__ == "__main__":
-    model = vgg16(weights=None)
-    model.eval()
+    model = vgg16(weights=None)     #加载vgg16模型结构，不加载预训练权重
+    model.eval()                    #评估模式
     ordered = flatten_model(model)
 
     print("=" * 80)
     print("VGG16 展开后的所有具体层")
     print("=" * 80)
+
     for i, (name, layer) in enumerate(ordered):
         print(f"[{i:2d}] {name:<22} {type(layer).__name__}")
     print(f"\n具体层总数: {len(ordered)}")
@@ -79,6 +80,7 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 80)
     print(f"候选点数量: {len(groups)}")
+    
     if len(groups) == 18:
         print("✓ 与论文 Table 2 的 18 个候选点一致")
     else:

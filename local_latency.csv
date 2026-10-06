@@ -1,0 +1,15 @@
+split_point,end_layer_index,end_layer_name,local_latency_ms
+0,-1,Input,0.0
+1,1,features.1,0.193
+2,4,features.4,0.6047
+3,6,features.6,0.8182
+4,9,features.9,1.148
+5,11,features.11,1.2373
+6,13,features.13,1.5879
+7,16,features.16,1.9492
+8,18,features.18,2.1612
+9,20,features.20,2.5077
+10,23,features.23,2.8527
+11,25,features.25,3.0902
+12,27,features.27,3.3007
+13,30,features.30,3.4652
